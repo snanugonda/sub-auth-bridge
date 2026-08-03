@@ -50,3 +50,6 @@ docker run -d -p 8787:8787 \
 - Mount is read-write, not read-only — `getValidAuth()` refreshes the access
   token and writes it back to the same file; read-only would break refresh
   after ~10 days and the container would need a manual restart+relogin.
+- `docker build` prints a `SecretsUsedInArgOrEnv` warning for
+  `OPEN_AI_SUB_AUTH_DIR` — false positive (it's a directory path, not a
+  secret), safe to ignore.

@@ -12,9 +12,14 @@ This is a personal/experimental project, not an official OpenAI SDK.
 
 `./scripts/repo.sh` wraps every command below — install, build, login,
 start/stop the service (Docker or plain Node), status, doctor, logs, chat,
-clean. Run `./scripts/repo.sh help` for the full list. This is the
-recommended way to operate the repo instead of running package-level npm
-commands by hand.
+clean, teardown, OpenClaw auto-sync. Run `./scripts/repo.sh help` for the
+full list. This is the recommended way to operate the repo instead of
+running package-level npm commands by hand.
+
+If something needs debugging on a machine you're not sitting at,
+`./scripts/repo.sh debug-bundle` writes one timestamped file with doctor
+output, service/auto-sync status, log tails, and redacted auth metadata
+(never raw tokens) — share that file as-is.
 
 ## How it works
 
@@ -29,10 +34,14 @@ commands by hand.
    shape (not `/v1/chat/completions`), with your access token as a Bearer
    token plus a `chatgpt-account-id` header. `store: false` is required —
    the backend rejects otherwise.
-4. **Refresh** — the access token is refreshed automatically via the stored
-   refresh token, a few seconds before it expires. You only need to log in
-   again if the refresh token itself is revoked (e.g. you signed out of
-   ChatGPT elsewhere).
+4. **Refresh** — for an independent login, the access token refreshes
+   automatically via the stored refresh token, guarded by a cross-process
+   lock so two of our own processes sharing the same `auth.json` never
+   refresh at once (OpenAI's refresh tokens are single-use — a double
+   refresh would strand one caller with an already-invalid token). You only
+   need to log in again if the refresh token itself is revoked. Credentials
+   imported from OpenClaw (`source: "openclaw"` in `auth.json`) are handled
+   differently — see [OpenClaw import](#importing-an-existing-openclaw-login) below.
 
 All network traffic goes to exactly two OpenAI-owned domains:
 `auth.openai.com` and `chatgpt.com`. Nothing else, no third parties. The
@@ -152,6 +161,57 @@ docker run -d -p 8787:8787 \
 
 See [`packages/service/CLAUDE.md`](packages/service/CLAUDE.md) for the full
 route reference.
+
+## Importing an existing OpenClaw login
+
+If a machine already has [OpenClaw](https://github.com/openclaw/openclaw)
+signed in with ChatGPT, you don't have to log in again separately:
+
+```bash
+./scripts/repo.sh login openclaw
+```
+
+This reads OpenClaw's own local credential store (read-only, never writes
+to it) and mirrors it into this repo's `auth.json`, tagged
+`source: "openclaw"`. Credentials tagged this way are **never refreshed by
+this repo** — OpenAI's refresh tokens are single-use, so refreshing an
+OpenClaw-derived token here would silently invalidate OpenClaw's own live
+session. Instead, this repo only ever re-syncs (read-only) from OpenClaw's
+current state.
+
+To keep that sync current automatically instead of re-running it by hand:
+
+```bash
+./scripts/repo.sh enable-auto-sync    # launchd (macOS) / cron (Linux), opt-in only
+./scripts/repo.sh auto-sync-status    # check it's registered
+./scripts/repo.sh disable-auto-sync   # remove it
+```
+
+Not installed by `setup` — you opt in explicitly. It runs
+`scripts/import-openclaw-auth.sh` every 60s; that script only ever reads
+OpenClaw's database and skips writing entirely when nothing's changed, so
+running it often is cheap and doesn't touch OpenAI at all (only OpenClaw's
+own refreshes, on its own schedule, ever call OpenAI).
+
+### Working across machines
+
+The typical loop when developing this against a machine you're not
+directly working on (e.g. testing `enable-auto-sync` on a host that already
+runs OpenClaw):
+
+```
+pull latest → ./scripts/repo.sh setup (or just enable-auto-sync)
+            → let it run
+            → ./scripts/repo.sh debug-bundle
+            → share the resulting .repo-state/diagnostics-<timestamp>.txt file
+            → (fixes land, get pushed)
+            → repeat from "pull latest"
+```
+
+`debug-bundle` is the only manual step — it bundles doctor output,
+service/auto-sync status, log tails, and redacted `auth.json` metadata
+(expiry/source only, never tokens) into one timestamped file that's safe to
+send as-is.
 
 ## Things worth knowing
 

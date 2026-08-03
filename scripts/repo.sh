@@ -47,8 +47,17 @@ cmd_build() {
 # ============================================================================
 
 cmd_login() {
-  echo "Running OAuth login (writes to ~/.open-ai-sub-auth/auth.json, shared by all packages)..."
-  (cd "$DEPENDENCY_DIR" && npm run login)
+  local mode="${1:-new}"
+  if [ "$mode" = "openclaw" ] || [ "$mode" = "--from-openclaw" ]; then
+    echo "Importing OAuth credential from an existing OpenClaw install..."
+    if ! "$ROOT_DIR/scripts/import-openclaw-auth.sh"; then
+      c_yellow "Import failed. Falling back to a fresh login."
+      (cd "$DEPENDENCY_DIR" && npm run login)
+    fi
+  else
+    echo "Running OAuth login (writes to ~/.open-ai-sub-auth/auth.json, shared by all packages)..."
+    (cd "$DEPENDENCY_DIR" && npm run login)
+  fi
 }
 
 # ============================================================================
@@ -305,6 +314,269 @@ cmd_clean() {
 }
 
 # ============================================================================
+# setup (first run) / teardown
+# ============================================================================
+
+cmd_setup() {
+  echo "== 1/5: dependency checks =="
+  if ! have node; then
+    c_red "node not found. Install Node 18+ and re-run."
+    exit 1
+  fi
+  if ! have docker || ! docker info >/dev/null 2>&1; then
+    c_yellow "docker not found or not running — will start the service as a plain Node process instead."
+  fi
+
+  echo
+  echo "== 2/5: install =="
+  cmd_install
+
+  echo
+  echo "== 3/5: sign in =="
+  if [ -f "$AUTH_FILE" ]; then
+    c_green "Already signed in (found $AUTH_FILE) — skipping."
+  else
+    local answer
+    if have "$ROOT_DIR/scripts/import-openclaw-auth.sh" && [ -f "$HOME/.openclaw/agents/main/agent/openclaw-agent.sqlite" ]; then
+      echo "An OpenClaw install with OpenAI credentials was detected on this machine."
+      read -r -p "Import OpenClaw's existing login instead of signing in again? [Y/n] " answer
+      answer="${answer:-y}"
+    else
+      answer="n"
+    fi
+    case "$answer" in
+      [Yy]*) cmd_login openclaw ;;
+      *) cmd_login new ;;
+    esac
+  fi
+
+  echo
+  echo "== 4/5: start the service =="
+  cmd_start auto
+
+  echo
+  echo "== 5/5: verify =="
+  local tries=0
+  until curl -sf "http://localhost:$SERVICE_PORT/api/health" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 20 ]; then
+      c_red "Service did not become healthy after 10s."
+      exit 1
+    fi
+    sleep 0.5
+  done
+  c_green "Health check passed."
+
+  echo "Sending a test chat message..."
+  local reply
+  reply="$(cmd_chat "Reply with exactly: setup ok" 2>&1)" || {
+    c_red "Test chat call failed: $reply"
+    exit 1
+  }
+  echo "Response: $reply"
+  echo
+  c_green "Setup complete. Service running on http://localhost:$SERVICE_PORT"
+}
+
+cmd_teardown() {
+  echo "Tearing down this repo's service (not touching OpenClaw, its config, or any other host state)..."
+  cmd_stop
+
+  if have docker && docker image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+    echo "Removing Docker image $DOCKER_IMAGE..."
+    docker rmi "$DOCKER_IMAGE" >/dev/null 2>&1 || true
+  fi
+
+  if [ -d "$STATE_DIR" ]; then
+    echo "Removing $STATE_DIR (pid/log files only)..."
+    rm -rf "$STATE_DIR"
+  fi
+
+  c_green "Teardown complete."
+  echo "Untouched on purpose: ~/.open-ai-sub-auth/auth.json (your login), ~/.openclaw (OpenClaw's own state), node_modules/dist (use 'clean' for those)."
+}
+
+# ============================================================================
+# OpenClaw auto-sync (opt-in OS scheduler — not installed by 'setup')
+# ============================================================================
+#
+# Registers scripts/import-openclaw-auth.sh to run on a schedule (every 60s)
+# so an OpenClaw-linked auth.json never goes stale between manual syncs.
+# Purely local, read-only against OpenClaw's DB — see that script's header.
+# Nothing here runs unless you explicitly call 'enable-auto-sync'.
+
+SYNC_INTERVAL_SECONDS="${SYNC_INTERVAL_SECONDS:-60}"
+LAUNCHD_LABEL="com.open-ai-sub-auth.openclaw-sync"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+CRON_MARKER="# open-ai-sub-auth-openclaw-sync"
+
+cmd_enable_auto_sync() {
+  local sync_script="$ROOT_DIR/scripts/import-openclaw-auth.sh"
+  mkdir -p "$STATE_DIR"
+  local log_file="$STATE_DIR/openclaw-sync.log"
+
+  case "$(uname)" in
+    Darwin)
+      mkdir -p "$(dirname "$LAUNCHD_PLIST")"
+      cat > "$LAUNCHD_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LAUNCHD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$sync_script</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>$SYNC_INTERVAL_SECONDS</integer>
+  <key>StandardOutPath</key>
+  <string>$log_file</string>
+  <key>StandardErrorPath</key>
+  <string>$log_file</string>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+      launchctl bootstrap "gui/$(id -u)" "$LAUNCHD_PLIST" 2>/dev/null \
+        || launchctl load "$LAUNCHD_PLIST"
+      c_green "Installed launchd agent: $LAUNCHD_LABEL (every ${SYNC_INTERVAL_SECONDS}s)"
+      echo "Plist: $LAUNCHD_PLIST"
+      echo "Log: $log_file"
+      ;;
+    Linux)
+      local cron_line="* * * * * /bin/bash $sync_script >> $log_file 2>&1 $CRON_MARKER"
+      (crontab -l 2>/dev/null | grep -v "$CRON_MARKER"; echo "$cron_line") | crontab -
+      c_green "Installed cron entry (every minute — cron's finest granularity)."
+      echo "Log: $log_file"
+      ;;
+    *)
+      c_red "Unsupported platform for auto-sync: $(uname). Run the sync script manually or via your own scheduler."
+      exit 1
+      ;;
+  esac
+}
+
+cmd_disable_auto_sync() {
+  case "$(uname)" in
+    Darwin)
+      if [ -f "$LAUNCHD_PLIST" ]; then
+        launchctl bootout "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null \
+          || launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+        rm -f "$LAUNCHD_PLIST"
+        c_green "Removed launchd agent: $LAUNCHD_LABEL"
+      else
+        echo "No launchd agent installed."
+      fi
+      ;;
+    Linux)
+      if crontab -l 2>/dev/null | grep -q "$CRON_MARKER"; then
+        (crontab -l 2>/dev/null | grep -v "$CRON_MARKER") | crontab -
+        c_green "Removed cron entry."
+      else
+        echo "No cron entry installed."
+      fi
+      ;;
+    *)
+      echo "Nothing to remove on this platform."
+      ;;
+  esac
+}
+
+cmd_auto_sync_status() {
+  case "$(uname)" in
+    Darwin)
+      if [ -f "$LAUNCHD_PLIST" ]; then
+        c_green "Installed: $LAUNCHD_PLIST"
+        launchctl list "$LAUNCHD_LABEL" 2>/dev/null || c_yellow "Plist present but not loaded — try enable-auto-sync again."
+      else
+        echo "Not installed."
+      fi
+      ;;
+    Linux)
+      if crontab -l 2>/dev/null | grep -q "$CRON_MARKER"; then
+        c_green "Installed:"
+        crontab -l 2>/dev/null | grep "$CRON_MARKER"
+      else
+        echo "Not installed."
+      fi
+      ;;
+    *)
+      echo "Not supported on this platform."
+      ;;
+  esac
+}
+
+# ============================================================================
+# debug bundle — one file to share back for analysis
+# ============================================================================
+
+cmd_debug_bundle() {
+  mkdir -p "$STATE_DIR"
+  local timestamp
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local out="$STATE_DIR/diagnostics-$timestamp.txt"
+
+  {
+    echo "open-ai-sub-auth diagnostics — $timestamp UTC"
+    echo "host: $(uname -a)"
+    echo "node: $(node -v 2>/dev/null || echo 'not found')"
+    echo "docker: $(docker -v 2>/dev/null || echo 'not found')"
+    echo
+
+    echo "===== doctor ====="
+    # Subshell: cmd_doctor calls `exit 1` on failure, which would otherwise
+    # kill this whole bundle command before the file is written.
+    (cmd_doctor) 2>&1 || true
+    echo
+
+    echo "===== auto-sync status ====="
+    (cmd_auto_sync_status) 2>&1 || true
+    echo
+
+    echo "===== service status ====="
+    (cmd_status) 2>&1 || true
+    echo
+
+    echo "===== openclaw sync log (last 200 lines) ====="
+    if [ -f "$STATE_DIR/openclaw-sync.log" ]; then
+      tail -n 200 "$STATE_DIR/openclaw-sync.log"
+    else
+      echo "(none yet at $STATE_DIR/openclaw-sync.log)"
+    fi
+    echo
+
+    echo "===== service log, node mode only (last 100 lines) ====="
+    if [ -f "$STATE_DIR/service.log" ]; then
+      tail -n 100 "$STATE_DIR/service.log"
+    else
+      echo "(none — either not running in node mode, or running via docker: run 'docker logs open-ai-sub-auth-service' separately if needed)"
+    fi
+    echo
+
+    echo "===== auth.json metadata (redacted — no tokens, ever) ====="
+    if [ -f "$AUTH_FILE" ]; then
+      node -e "
+        const a = require(process.argv[1]);
+        console.log(JSON.stringify({
+          source: a.source ?? null,
+          expires_at_iso: new Date(a.expires_at).toISOString(),
+          expires_in_min: Math.round((a.expires_at - Date.now()) / 60000),
+        }, null, 2));
+      " "$AUTH_FILE" 2>&1
+    else
+      echo "(no auth.json found)"
+    fi
+  } | sed -E 's/\x1b\[[0-9;]*m//g' > "$out"
+
+  c_green "Diagnostics written to: $out"
+  echo "Contains: doctor + auto-sync + service status, sync/service log tails, and redacted auth.json metadata (source/expiry only — no tokens). Safe to share as-is."
+}
+
+# ============================================================================
 # help / dispatch
 # ============================================================================
 
@@ -312,9 +584,11 @@ cmd_help() {
   cat <<EOF
 Usage: ./scripts/repo.sh <command> [args]
 
+  setup            first-run: install, sign in (asks: new login or import
+                   from OpenClaw), start the service, health check, test chat
   install          npm install in all 3 packages
   build            build/typecheck all 3 packages
-  login            run OAuth login (shared across all packages)
+  login [new|openclaw]   run OAuth login, or import from an existing OpenClaw install
   start [docker|node]   start packages/service (auto-detects docker if available)
   stop             stop the running service, however it was started
   restart [docker|node]
@@ -322,7 +596,15 @@ Usage: ./scripts/repo.sh <command> [args]
   logs             tail service logs (docker or local)
   chat "prompt"    send a chat message (via running service, else dependency package)
   doctor           full environment health check
+  teardown         stop + remove this service's docker image + state files
+                   (never touches OpenClaw or your auth.json)
   clean            remove node_modules/dist in all 3 packages
+  enable-auto-sync    install a launchd (macOS) / cron (Linux) job that runs
+                   the OpenClaw sync every ${SYNC_INTERVAL_SECONDS:-60}s (opt-in, not run by 'setup')
+  disable-auto-sync   remove that scheduled job
+  auto-sync-status    check whether it's currently installed
+  debug-bundle     write one timestamped diagnostics file (doctor, auto-sync
+                   status, log tails, redacted auth metadata) to share back
   help             this message
 EOF
 }
@@ -331,9 +613,10 @@ main() {
   local command="${1:-help}"
   shift || true
   case "$command" in
+    setup) cmd_setup ;;
     install) cmd_install ;;
     build) cmd_build ;;
-    login) cmd_login ;;
+    login) cmd_login "${1:-new}" ;;
     start) cmd_start "${1:-auto}" ;;
     stop) cmd_stop ;;
     restart) cmd_restart "${1:-auto}" ;;
@@ -341,7 +624,12 @@ main() {
     logs) cmd_logs ;;
     chat) cmd_chat "$@" ;;
     doctor) cmd_doctor ;;
+    teardown) cmd_teardown ;;
     clean) cmd_clean ;;
+    enable-auto-sync) cmd_enable_auto_sync ;;
+    disable-auto-sync) cmd_disable_auto_sync ;;
+    auto-sync-status) cmd_auto_sync_status ;;
+    debug-bundle) cmd_debug_bundle ;;
     help|-h|--help) cmd_help ;;
     *)
       c_red "Unknown command: $command"

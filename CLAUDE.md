@@ -25,11 +25,86 @@ into the right shape. Verified working (OCR'd text out of a PNG) in all 3.
   `extensions/openai/default-models.ts` (`OPENAI_CODEX_DEFAULT_MODEL`) on
   GitHub for the current value, not old docs/memory.
 - Token file: `~/.open-ai-sub-auth/auth.json`, mode `0600`, shared across all
-  3 packages. Access token auto-refreshes minutes before expiry; only re-run
-  a login flow if refresh itself fails (revoked ChatGPT session).
+  3 packages. Independent-login credentials (no `source` field) auto-refresh
+  minutes before expiry, guarded by a cross-process lockfile (`auth.lock` in
+  the same dir) so two processes sharing this file never both call OpenAI's
+  refresh endpoint at once — OpenAI's refresh tokens are single-use/rotating,
+  so a double-refresh would strand one caller with an already-invalidated
+  token. Writes go through temp-file + `rename()` so a concurrent reader
+  never sees a partial file. Credentials tagged `source: "openclaw"` are
+  never refreshed by any of the 3 packages at all — see next section.
 - All outbound calls go to `auth.openai.com` and `chatgpt.com` only. `CLIENT_ID`
   (`app_EMoamEEZ73f0CkXaXp7hrann`) is OpenAI's own *public* Codex CLI OAuth
   client id — not a secret, safe to see hardcoded in all 3 packages.
+
+## Cloning to a new machine
+
+`./scripts/repo.sh setup` handles the whole first-run flow: installs deps,
+asks whether to import an OpenClaw login or do a fresh one (only if
+`~/.open-ai-sub-auth/auth.json` doesn't already exist), starts the service,
+health-checks it, sends a test chat message. `./scripts/repo.sh teardown`
+reverses the service side of it (stop, remove docker image, clear
+`.repo-state`) without ever touching `auth.json`, OpenClaw, or anything else
+on the host.
+
+OpenClaw import (`scripts/import-openclaw-auth.sh`, also reachable as
+`./scripts/repo.sh login openclaw`) reads OpenClaw's own SQLite store
+read-only (`~/.openclaw/agents/main/agent/openclaw-agent.sqlite`, table
+`auth_profile_store`, row `store_key='primary'`) and writes this repo's
+`auth.json` in this repo's own shape, tagged `source: "openclaw"`. This
+depends on OpenClaw's internal, undocumented schema, so it can break on a
+future OpenClaw release — but it has been verified against a real
+production OpenClaw database (not just a synthetic mock): imported the real
+`openai:default` credential, confirmed the `account_id` matched the account
+already in use, then made a live chat call with the imported token and got
+a real response back. If it ever fails or OpenClaw changes its storage
+format, the fallback is always `./scripts/repo.sh login` (fresh OAuth,
+~30 seconds, same account, zero dependency on OpenClaw's internals).
+
+**Why this repo never refreshes an OpenClaw-sourced credential itself**:
+OpenAI's refresh tokens are single-use/rotating (inferred from OpenClaw's
+own `refresh_token_reused` error-handling code). If this repo called
+refresh on a token copied from OpenClaw, it would silently invalidate
+OpenClaw's own live session the moment it did. So `getValidAuth()` in all 3
+packages checks `source === "openclaw"` and, if expired, throws instead of
+refreshing — it only ever gets a fresh token by re-running the import
+script, which only ever reads (never writes to, never refreshes) OpenClaw's
+store. This has been fully tested live against synthetic and real data:
+expired-and-tagged credentials fail fast with zero network calls; the
+import script correctly imports, skips writing when unchanged (proven via
+unchanged mtime), and syncs-and-writes when OpenClaw's copy changes.
+
+**Auto-sync (`./scripts/repo.sh enable-auto-sync`)**: registers the import
+script with launchd (macOS) or cron (Linux) to run every 60s by default, so
+an OpenClaw-linked `auth.json` practically never goes stale. Purely local —
+the sync itself never talks to OpenAI, only OpenClaw's own refreshes
+(happening on its own schedule, independent of this) do, so running this
+often costs nothing on OpenAI's side. **Not installed by `setup`** — opt-in
+only, and as of this writing **not yet live-verified against real
+launchd/cron** (blocked by this environment's own permission classifier
+mid-session) — the code is written and syntax-checked but unverified
+end-to-end.
+
+To report back how it went on a real machine: `./scripts/repo.sh
+debug-bundle` writes one timestamped file
+(`.repo-state/diagnostics-<UTC timestamp>.txt`) containing doctor output,
+auto-sync status, service status, the last 200 lines of the sync log, the
+last 100 lines of the node-mode service log, and redacted `auth.json`
+metadata (`source` + expiry only — never tokens, never `access`/`refresh`
+values). Safe to share as-is, no manual redaction needed.
+
+## Dev quirks (this environment)
+
+- `tsx -e "..."` / `node -e "..."` fail on top-level `await` (esbuild cjs
+  error) — write a scratch `.ts` file and `npx tsx file.ts` instead.
+- Bash tool cwd can silently reset to repo root between calls — `cd`
+  explicitly (or use absolute paths) per command, don't assume a prior `cd`
+  persisted.
+- Attached image files under `~/.claude/image-cache/...` are
+  session-temporary and can vanish by a later turn — for repeatable
+  image/OCR tests, generate one with
+  `python3 -c "from PIL import Image, ImageDraw; ..."` instead of relying on
+  it still being there.
 
 ## Reference sources
 
