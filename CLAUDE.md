@@ -4,6 +4,15 @@ Monorepo of 3 **standalone** implementations of the same thing: ChatGPT
 subscription OAuth (PKCE) + Codex backend calls. No shared code between
 packages by design — see `README.md` for which package is which.
 
+## Multimodal input
+
+All 3 packages support `content: string | ContentPart[]` on `ChatMessage`,
+where `ContentPart` is `{type:"text",text}` / `{type:"image",dataUrl}` /
+`{type:"file",dataUrl,filename}` (maps to Responses API `input_text` /
+`input_image` / `input_file`). Each package also exports `imageFromFile(path)`
+and `fileFromFile(path)` helpers that read a local file and base64-encode it
+into the right shape. Verified working (OCR'd text out of a PNG) in all 3.
+
 ## Shared gotchas (apply to all 3 packages)
 
 - **`store: false` is mandatory** in the Codex request body. Omitting it (or

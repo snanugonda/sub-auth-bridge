@@ -17,6 +17,6 @@ npm run build && npm run start   # production
 - `GET /api/health` — liveness
 - `GET /api/status` — `{ signedIn, accountId, expiresAt }` from the shared token file
 - `POST /api/login` — runs the browser OAuth flow server-side (blocks until browser completes it)
-- `POST /api/chat` — `{ messages, model?, instructions?, stream? }`. `stream: true` returns SSE (`data: {"delta": "..."}`), otherwise `{ text }`.
+- `POST /api/chat` — `{ messages, model?, instructions?, stream? }`. `stream: true` returns SSE (`data: {"delta": "..."}`), otherwise `{ text }`. Each message's `content` can be a string or a `ContentPart[]` (`text`/`image`/`file` — image/file parts need a `dataUrl`, i.e. the caller base64-encodes before sending over HTTP; `imageFromFile`/`fileFromFile` in `src/client.ts` are for server-side use only, not exposed over the wire).
 
 `PORT` env var overrides the default `8787`.

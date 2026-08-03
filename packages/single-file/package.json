@@ -6,7 +6,8 @@
   "description": "Dev harness only — verifies chatgpt-codex-auth.ts typechecks and runs. The .ts file itself is the deliverable: copy-paste it into any project.",
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "try": "tsx try.ts"
+    "try": "tsx try.ts",
+    "try-image": "tsx try-image.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

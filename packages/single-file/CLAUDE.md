@@ -10,6 +10,7 @@ shipped. See root `CLAUDE.md` for shared gotchas.
 ```bash
 npm run typecheck
 npm run try -- "prompt here"   # exercises chat() through the real file
+npm run try-image -- /path/to/image.png   # exercises imageFromFile() + chat()
 ```
 
 If you edit `chatgpt-codex-auth.ts`, this is intentionally NOT synced with

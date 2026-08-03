@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { extname, basename } from "node:path";
 import { CODEX_RESPONSES_URL, OPENAI_HEADERS, OPENAI_HEADER_VALUES } from "./constants.js";
 import { getValidAuth } from "./auth.js";
 
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; dataUrl: string }
+  | { type: "file"; dataUrl: string; filename: string };
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | ContentPart[];
 }
 
 export interface ChatOptions {
@@ -13,12 +20,48 @@ export interface ChatOptions {
   onDelta?: (text: string) => void;
 }
 
+const MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".pdf": "application/pdf",
+};
+
+function fileToDataUrl(path: string): string {
+  const mime = MIME_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+  const b64 = readFileSync(path).toString("base64");
+  return `data:${mime};base64,${b64}`;
+}
+
+/** Reads a local image file (on the server's disk) and builds an image content part. */
+export function imageFromFile(path: string): ContentPart {
+  return { type: "image", dataUrl: fileToDataUrl(path) };
+}
+
+/** Reads a local file (e.g. PDF, on the server's disk) and builds a file content part. */
+export function fileFromFile(path: string): ContentPart {
+  return { type: "file", dataUrl: fileToDataUrl(path), filename: basename(path) };
+}
+
 // The Codex backend speaks the Responses API shape, not /v1/chat/completions.
 function toResponsesInput(messages: ChatMessage[]) {
-  return messages.map((m) => ({
-    role: m.role,
-    content: [{ type: m.role === "assistant" ? "output_text" : "input_text", text: m.content }],
-  }));
+  return messages.map((m) => {
+    const textType = m.role === "assistant" ? "output_text" : "input_text";
+    if (typeof m.content === "string") {
+      return { role: m.role, content: [{ type: textType, text: m.content }] };
+    }
+    return {
+      role: m.role,
+      content: m.content.map((part) => {
+        if (part.type === "image") return { type: "input_image", image_url: part.dataUrl };
+        if (part.type === "file")
+          return { type: "input_file", filename: part.filename, file_data: part.dataUrl };
+        return { type: textType, text: part.text };
+      }),
+    };
+  });
 }
 
 /** Streams a completion from the ChatGPT Codex backend using subscription auth. */
