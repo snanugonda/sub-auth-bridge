@@ -93,18 +93,19 @@ container, even via `host.docker.internal`. A loopback-bound host port
 never accepts connections routed through the Docker gateway, container or
 not.
 
-To let another container reach this one, join a shared Docker network and
-address it by container name instead of any host port at all:
-
-```bash
-DOCKER_NETWORK=my-shared-net ./scripts/repo.sh start docker
-```
-
-Creates the network if it doesn't exist, joins it, and the other container
-(on the same network) reaches this one as `http://hub:8787` — Docker's
+`repo.sh start docker` joins a shared Docker network by default —
+`my-hub-net` — creating it if it doesn't exist. The other container (on
+the same network) reaches this one as `http://hub:8787` — Docker's
 built-in DNS, using the fixed *internal* container port, so this also
 sidesteps the whole dynamic-host-port-discovery problem for that consumer.
-Unset by default — no behavior change unless you ask for it.
+Override with `DOCKER_NETWORK=<other-name>`, or `DOCKER_NETWORK=""` to
+disable joining any network entirely (loopback-only, as before this
+existed):
+
+```bash
+DOCKER_NETWORK=some-other-net ./scripts/repo.sh start docker   # different network
+DOCKER_NETWORK="" ./scripts/repo.sh start docker                # no network join at all
+```
 
 The alternative (binding `0.0.0.0` instead of `127.0.0.1`) also works but
 was deliberately not made the default: this API has zero auth of its own

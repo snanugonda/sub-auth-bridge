@@ -13,11 +13,12 @@ NODE_PID_FILE="$STATE_DIR/service-node.pid"
 SERVICE_PORT_FILE="$STATE_DIR/service-port"
 DOCKER_CONTAINER="hub"
 DOCKER_IMAGE="hub"
-# Opt-in: join a named Docker network so other containers can reach this one
-# by container name (http://hub:8787) instead of a host port at all — sidesteps
-# the loopback/host.docker.internal reachability problem entirely. Created if
-# it doesn't already exist. Unset by default: no behavior change unless asked.
-DOCKER_NETWORK="${DOCKER_NETWORK:-}"
+# Joined so other containers can reach this one by container name
+# (http://hub:8787) instead of a host port at all — sidesteps the
+# loopback/host.docker.internal reachability problem entirely. Created if
+# it doesn't already exist. Override with DOCKER_NETWORK= if ever needed
+# (empty string disables joining any network).
+DOCKER_NETWORK="${DOCKER_NETWORK-my-hub-net}"
 
 # If the caller set PORT explicitly, that's a hard requirement — start fails
 # loudly if it's taken, same as before. Otherwise the port is chosen

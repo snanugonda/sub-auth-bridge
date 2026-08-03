@@ -240,10 +240,11 @@ docker run -d --name hub -p 8787:8787 \
 
 The container/image is named `hub` — deliberately generic, not
 `open-ai-...`, since outward-facing names in this project don't reveal the
-backend. See [`packages/service/CLAUDE.md`](packages/service/CLAUDE.md) for
-the full route reference, and for how another container can reach `hub` by
-name instead of a host port (`DOCKER_NETWORK=<name> ./scripts/repo.sh start
-docker`).
+backend. `./scripts/repo.sh start docker` joins a shared Docker network
+(`my-hub-net` by default) so another container can reach it as
+`http://hub:8787` by name instead of a host port — see
+[`packages/service/CLAUDE.md`](packages/service/CLAUDE.md) for the full
+route reference and how to override/disable that.
 
 ## Importing an existing OpenClaw login
 

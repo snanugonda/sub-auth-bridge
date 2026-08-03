@@ -11,10 +11,10 @@ services:
     environment:
       - OPEN_AI_SUB_AUTH_DIR=/data/auth
     # To let another container reach this one by name instead of a host
-    # port, join a shared external network here (see packages/service/CLAUDE.md
-    # for repo.sh's equivalent via DOCKER_NETWORK=<name>):
+    # port, join the shared network (repo.sh's equivalent joins this same
+    # network — my-hub-net — by default; see packages/service/CLAUDE.md):
     # networks:
-    #   - shared-net
+    #   - my-hub-net
 # networks:
-#   shared-net:
+#   my-hub-net:
 #     external: true
