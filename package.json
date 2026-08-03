@@ -1,0 +1,18 @@
+{
+  "name": "open-ai-sub-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sign in with ChatGPT (OAuth) and call the Codex backend using a ChatGPT Plus/Pro subscription instead of API-key billing.",
+  "scripts": {
+    "build": "tsc -p .",
+    "login": "tsx src/cli-login.ts",
+    "chat": "tsx src/example.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  }
+}
