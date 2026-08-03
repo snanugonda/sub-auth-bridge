@@ -10,16 +10,35 @@ This is a personal/experimental project, not an official OpenAI SDK.
 
 ## Maintenance script
 
-`./scripts/repo.sh` wraps every command below — install, build, login,
-start/stop the service (Docker or plain Node), status, doctor, logs, chat,
-clean, teardown, OpenClaw auto-sync. Run `./scripts/repo.sh help` for the
-full list. This is the recommended way to operate the repo instead of
-running package-level npm commands by hand.
+`./scripts/repo.sh <command>` is the **recommended way to operate this
+repo** — install, login, run the service, check status, debug, clean up.
+Prefer it over running package-level `npm` commands by hand (those still
+work, see [Manual setup](#manual-setup-without-reposh) below, but you lose
+the OpenClaw-login prompt, health checks, and diagnostics bundling).
 
-If something needs debugging on a machine you're not sitting at,
-`./scripts/repo.sh debug-bundle` writes one timestamped file with doctor
-output, service/auto-sync status, log tails, and redacted auth metadata
-(never raw tokens) — share that file as-is.
+| Command | What it does |
+|---|---|
+| `setup` | First run: install, ask login mode (new vs. OpenClaw import), start the service, health-check, send a test chat |
+| `install` | `npm install` in all 3 packages |
+| `build` | Build/typecheck all 3 packages |
+| `login [new\|openclaw]` | Run OAuth login, or import an existing OpenClaw login |
+| `start [docker\|node]` | Start `packages/service` (auto-detects Docker if available) |
+| `stop` | Stop the running service, however it was started |
+| `restart [docker\|node]` | Stop then start |
+| `status` | Auth status + service status + health check |
+| `logs` | Tail service logs (Docker or local) |
+| `chat "prompt"` | Send a chat message (via the running service, else falls back to `packages/dependency`) |
+| `doctor` | Full environment health check |
+| `teardown` | Stop + remove the service's Docker image + clear `.repo-state` (never touches OpenClaw or your `auth.json`) |
+| `clean` | Remove `node_modules`/`dist` in all 3 packages |
+| `enable-auto-sync` | Install a launchd (macOS) / cron (Linux) job that runs the OpenClaw sync every 60s — opt-in, not run by `setup` |
+| `disable-auto-sync` | Remove that scheduled job |
+| `auto-sync-status` | Check whether it's currently installed |
+| `debug-bundle` | Write one timestamped diagnostics file (doctor + status + log tails + redacted auth metadata, never raw tokens) to share back for debugging |
+| `help` | Print this list |
+
+`./scripts/repo.sh help` prints the same list from the script itself if
+this table ever drifts out of sync.
 
 ## How it works
 
@@ -81,7 +100,24 @@ automatically.
 
 ## Quick start
 
-Pick any package and log in once:
+```bash
+./scripts/repo.sh setup
+```
+
+Installs all 3 packages, prompts you to sign in (new OAuth login, or import
+an existing OpenClaw session if one's found on the machine), starts
+`packages/service`, health-checks it, and sends a real test chat message so
+you know it actually works. That's the whole setup.
+
+```bash
+./scripts/repo.sh chat "Say hello in one sentence."
+```
+
+### Manual setup (without repo.sh)
+
+If you'd rather work with one package directly instead of through
+`repo.sh` — e.g. you only want `packages/dependency` as a code dependency,
+not the service:
 
 ```bash
 cd packages/dependency   # or packages/single-file, or packages/service
