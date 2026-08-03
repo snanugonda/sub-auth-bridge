@@ -26,13 +26,33 @@ npm run build && npm run start   # production
   `/api/chat`, not a flag on it — the contract (plain text, nothing else) is
   incompatible with `/api/chat`'s `{ text }` JSON envelope.
 
-`PORT` env var overrides the default `8787`.
+`PORT` env var overrides the default `8787` for what the process itself
+binds to. `repo.sh start` doesn't rely on this default when running
+standalone — see [dynamic ports](#dynamic-ports-repo-sh) below.
 
-`GET /openapi.json` serves `openapi.json` (checked into this dir) at
-runtime — read once into memory at startup, so a service restart is needed
-after editing the spec file. Keep the two in sync by hand; nothing
-generates one from the other. Validated with `npx @redocly/cli lint
-openapi.json` before committing.
+`GET /openapi.json` serves `openapi.json` (checked into this dir), parsed
+once at startup but with `servers[0].url` **patched per-request from the
+incoming `Host` header**, not from `PORT`. This matters: inside a Docker
+container, `PORT` is always the fixed *internal* port (8787) — the process
+has no way to know what *host* port Docker mapped it to, so deriving from
+`PORT` silently produces a wrong, unreachable URL whenever host and
+container ports differ (which is the normal case once `repo.sh` starts
+assigning ports dynamically). `Host` is always correct because it's
+literally the address the client used to connect. Content of the base spec
+(routes/schemas) is otherwise static; keep it in sync with `src/server.ts`
+by hand — validate with `npx @redocly/cli lint openapi.json` before
+committing.
+
+### Dynamic ports (repo.sh)
+
+When started via `./scripts/repo.sh start` (not `npm run dev`/`docker run`
+directly), the host port isn't fixed at 8787 unless `PORT` is set
+explicitly — see the root README's
+[Dynamic ports](../../README.md#dynamic-ports) section. `repo.sh` tracks
+the chosen port in `.repo-state/service-port`; this package's own code has
+no awareness of that file, it just binds whatever `PORT` env var it's
+launched with (or `8787` if unset, for direct `npm run dev`/`docker run`
+usage).
 
 ## Docker
 

@@ -10,9 +10,29 @@ SERVICE_DIR="$ROOT_DIR/packages/service"
 AUTH_FILE="$HOME/.open-ai-sub-auth/auth.json"
 STATE_DIR="$ROOT_DIR/.repo-state"
 NODE_PID_FILE="$STATE_DIR/service-node.pid"
+SERVICE_PORT_FILE="$STATE_DIR/service-port"
 DOCKER_CONTAINER="open-ai-sub-auth-service"
 DOCKER_IMAGE="open-ai-sub-auth-service"
-SERVICE_PORT="${PORT:-8787}"
+
+# If the caller set PORT explicitly, that's a hard requirement — start fails
+# loudly if it's taken, same as before. Otherwise the port is chosen
+# dynamically at start time (Docker's own ephemeral allocator, or a free-port
+# probe for node mode) and persisted to SERVICE_PORT_FILE so every other
+# command (status/chat/logs/stop/debug-bundle) in a later invocation can find
+# the currently-running instance without guessing 8787.
+PORT_EXPLICIT=false
+if [ -n "${PORT:-}" ]; then PORT_EXPLICIT=true; fi
+
+resolve_service_port() {
+  if [ "$PORT_EXPLICIT" = true ]; then
+    echo "$PORT"
+  elif [ -f "$SERVICE_PORT_FILE" ]; then
+    cat "$SERVICE_PORT_FILE"
+  else
+    echo 8787
+  fi
+}
+SERVICE_PORT="$(resolve_service_port)"
 
 c_red() { printf '\033[31m%s\033[0m\n' "$1"; }
 c_green() { printf '\033[32m%s\033[0m\n' "$1"; }
@@ -68,6 +88,25 @@ port_pid() {
   lsof -ti ":$SERVICE_PORT" 2>/dev/null || true
 }
 
+port_in_use() {
+  [ -n "$(lsof -ti ":$1" 2>/dev/null || true)" ]
+}
+
+# Asks the OS for a free ephemeral port by binding to port 0 and reading
+# back what got assigned, then releasing it — more reliable than scanning
+# upward from 8787 ourselves (no manual bookkeeping of "which port did I
+# already try"), at the cost of a small, well-understood race between the
+# probe releasing the port and the real process binding it moments later.
+find_free_port() {
+  node -e "
+    const s = require('net').createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const p = s.address().port;
+      s.close(() => console.log(p));
+    });
+  "
+}
+
 cmd_start() {
   local mode="${1:-auto}"
   if [ ! -f "$AUTH_FILE" ]; then
@@ -83,8 +122,16 @@ cmd_start() {
     fi
   fi
 
-  if [ -n "$(port_pid)" ]; then
-    c_yellow "Something is already listening on port $SERVICE_PORT. Run './scripts/repo.sh stop' first."
+  # Guard against a second start only when WE'RE already tracking a running
+  # instance — not by checking whether some unrelated process happens to be
+  # on port 8787 (that was the original bug: a container on that port from
+  # something else entirely blocked us from ever starting).
+  if have docker && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$DOCKER_CONTAINER"; then
+    c_yellow "Docker container '$DOCKER_CONTAINER' is already running. Run './scripts/repo.sh stop' first."
+    exit 1
+  fi
+  if [ -f "$NODE_PID_FILE" ] && kill -0 "$(cat "$NODE_PID_FILE")" 2>/dev/null; then
+    c_yellow "A local node process (pid $(cat "$NODE_PID_FILE")) is already running. Run './scripts/repo.sh stop' first."
     exit 1
   fi
 
@@ -94,14 +141,44 @@ cmd_start() {
     echo "Starting service in Docker..."
     docker build -t "$DOCKER_IMAGE" "$SERVICE_DIR"
     docker rm -f "$DOCKER_CONTAINER" >/dev/null 2>&1 || true
-    docker run -d --name "$DOCKER_CONTAINER" -p "$SERVICE_PORT:8787" \
-      -v "$HOME/.open-ai-sub-auth:/data/auth" \
-      -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
-      "$DOCKER_IMAGE" >/dev/null
+
+    if [ "$PORT_EXPLICIT" = true ]; then
+      if port_in_use "$PORT"; then
+        c_red "Port $PORT (set via \$PORT) is already in use. Pick a different PORT or free it first."
+        exit 1
+      fi
+      docker run -d --name "$DOCKER_CONTAINER" -p "$PORT:8787" \
+        -v "$HOME/.open-ai-sub-auth:/data/auth" \
+        -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
+        "$DOCKER_IMAGE" >/dev/null
+      SERVICE_PORT="$PORT"
+    else
+      # Bind only the container port, no fixed host port — Docker/the OS
+      # picks a free ephemeral one, on loopback only. This is what actually
+      # fixes "port 8787 already taken by some other container": we don't
+      # ask for 8787 at all unless the caller explicitly wants it.
+      docker run -d --name "$DOCKER_CONTAINER" -p "127.0.0.1::8787" \
+        -v "$HOME/.open-ai-sub-auth:/data/auth" \
+        -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
+        "$DOCKER_IMAGE" >/dev/null
+      SERVICE_PORT="$(docker port "$DOCKER_CONTAINER" 8787 | tail -1 | sed -E 's/.*:([0-9]+)$/\1/')"
+    fi
+    echo "$SERVICE_PORT" > "$SERVICE_PORT_FILE"
     c_green "Service running in Docker on http://localhost:$SERVICE_PORT"
   elif [ "$mode" = "node" ]; then
     echo "Starting service as a local Node process..."
     (cd "$SERVICE_DIR" && npm run build >/dev/null)
+
+    if [ "$PORT_EXPLICIT" = true ]; then
+      if port_in_use "$PORT"; then
+        c_red "Port $PORT (set via \$PORT) is already in use. Pick a different PORT or free it first."
+        exit 1
+      fi
+      SERVICE_PORT="$PORT"
+    else
+      SERVICE_PORT="$(find_free_port)"
+    fi
+
     # No subshell grouping around the background job — that would make $!
     # capture a wrapper PID instead of the actual node process, orphaning it
     # on stop. cd in the current shell, launch directly, cd back.
@@ -111,6 +188,7 @@ cmd_start() {
     echo $! >"$NODE_PID_FILE"
     cd "$prev_dir"
     sleep 1
+    echo "$SERVICE_PORT" > "$SERVICE_PORT_FILE"
     c_green "Service running (pid $(cat "$NODE_PID_FILE")) on http://localhost:$SERVICE_PORT"
   else
     c_red "Unknown mode: $mode (use 'docker' or 'node')"
@@ -151,6 +229,8 @@ cmd_stop() {
       fi
     done
   fi
+  rm -f "$SERVICE_PORT_FILE"
+
   if [ "$stopped" = true ]; then
     c_green "Service stopped."
   else
@@ -589,7 +669,9 @@ Usage: ./scripts/repo.sh <command> [args]
   install          npm install in all 3 packages
   build            build/typecheck all 3 packages
   login [new|openclaw]   run OAuth login, or import from an existing OpenClaw install
-  start [docker|node]   start packages/service (auto-detects docker if available)
+  start [docker|node]   start packages/service (auto-detects docker if
+                   available); picks a free port automatically unless PORT
+                   is set, tracked in .repo-state/service-port
   stop             stop the running service, however it was started
   restart [docker|node]
   status           auth status + service status + health check

@@ -22,7 +22,7 @@ the OpenClaw-login prompt, health checks, and diagnostics bundling).
 | `install` | `npm install` in all 3 packages |
 | `build` | Build/typecheck all 3 packages |
 | `login [new\|openclaw]` | Run OAuth login, or import an existing OpenClaw login |
-| `start [docker\|node]` | Start `packages/service` (auto-detects Docker if available) |
+| `start [docker\|node]` | Start `packages/service` (auto-detects Docker if available); picks a free port automatically — see [Dynamic ports](#dynamic-ports) |
 | `stop` | Stop the running service, however it was started |
 | `restart [docker\|node]` | Stop then start |
 | `status` | Auth status + service status + health check |
@@ -172,7 +172,42 @@ caller base64-encodes and sends a `dataUrl` directly in the JSON body (its
 `imageFromFile`/`fileFromFile` helpers exist too, but only make sense if
 you're reading a file already on the server's own disk).
 
+## Dynamic ports
+
+`./scripts/repo.sh start` (and `setup`) doesn't assume port `8787` is
+free — a common problem on machines running lots of Docker containers.
+Unless you set `PORT=` yourself, it picks a free port automatically:
+Docker's own ephemeral-port allocator in Docker mode (`docker run -p
+127.0.0.1::8787`, then `docker port` to learn what got assigned), or a
+quick free-port probe in node mode.
+
+The chosen port is written to `.repo-state/service-port` and read back by
+`status`, `chat`, `logs`, `stop`, and `debug-bundle` — you don't need to
+track it yourself:
+
+```bash
+./scripts/repo.sh start
+./scripts/repo.sh status   # shows the actual port it landed on
+./scripts/repo.sh chat "hi"   # finds it automatically, no need to pass a URL
+```
+
+`GET /openapi.json`'s `servers[0].url` reflects the port you actually
+connected through (derived from the request's `Host` header, not a
+baked-in value) — safe to fetch from a running instance regardless of
+which port it ended up on.
+
+Set `PORT=` explicitly if you want a fixed, predictable port instead
+(`PORT=8787 ./scripts/repo.sh start`) — that's treated as a hard
+requirement and fails loudly if it's already taken, rather than silently
+picking a different one.
+
 ## Running the service in Docker
+
+This section is the manual/direct path (fixed port `8787:8787`). If you're
+using `./scripts/repo.sh start docker` (or `setup`) instead, it picks a
+free host port automatically unless you set `PORT=` yourself — see
+[Dynamic ports](#dynamic-ports) below for how to find out which port it
+picked.
 
 > **Prerequisite: log in on the host before starting the container.**
 > The OAuth flow needs a real browser and a local callback server on

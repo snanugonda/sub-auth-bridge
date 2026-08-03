@@ -7,12 +7,22 @@ import { chat, type ChatMessage } from "./client.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
-// Read once at startup, not per-request — it's a static file that ships
-// with the package, not something that changes while the service runs.
-const OPENAPI_JSON = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "..", "openapi.json"),
-  "utf-8",
+// Parsed once at startup — the static file's servers[0].url is a
+// placeholder. It gets overwritten per-request from the incoming Host
+// header (see handleOpenapi below), not from PORT: inside a Docker
+// container, PORT is always the fixed *internal* port (8787), never the
+// dynamically-assigned *host* port the client actually connected through —
+// the container has no way to know that mapping. Deriving from Host
+// instead is correct in every case (node mode, Docker, and any future
+// reverse proxy) since it's simply whatever address the client used.
+const openapiSpecTemplate = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "openapi.json"), "utf-8"),
 );
+
+function handleOpenapi(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const spec = { ...openapiSpecTemplate, servers: [{ url: `http://${req.headers.host}` }] };
+  res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(spec, null, 2));
+}
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -149,7 +159,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === "/openapi.json") {
-    res.writeHead(200, { "Content-Type": "application/json" }).end(OPENAPI_JSON);
+    handleOpenapi(req, res);
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/status") {

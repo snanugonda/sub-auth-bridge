@@ -105,6 +105,16 @@ values). Safe to share as-is, no manual redaction needed.
   image/OCR tests, generate one with
   `python3 -c "from PIL import Image, ImageDraw; ..."` instead of relying on
   it still being there.
+- A process running inside a Docker container **cannot know its own
+  host-mapped port** from `process.env.PORT` — that env var (if set at all
+  inside the container) is always the fixed *internal* container port, not
+  whatever host port Docker/the OS assigned it (`-p 127.0.0.1::8787`
+  ephemeral mapping). Learned this building the OpenAPI `servers.url` field
+  in `packages/service`: patching it from `PORT` at startup silently
+  produced a wrong, unreachable URL once `repo.sh` started assigning host
+  ports dynamically. Fix was deriving the URL from the incoming request's
+  `Host` header instead — always correct, works identically in node mode,
+  Docker, and behind any future reverse proxy.
 
 ## Reference sources
 
