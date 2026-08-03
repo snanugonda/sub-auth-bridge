@@ -1,0 +1,16 @@
+{
+  "name": "@open-ai-sub-auth/single-file",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev harness only — verifies chatgpt-codex-auth.ts typechecks and runs. The .ts file itself is the deliverable: copy-paste it into any project.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "try": "tsx try.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  }
+}
