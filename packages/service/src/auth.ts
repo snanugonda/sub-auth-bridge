@@ -22,7 +22,9 @@ export interface StoredAuth {
   expires_at: number; // epoch ms
 }
 
-const AUTH_DIR = join(homedir(), ".open-ai-sub-auth");
+// Override lets a container point this at a bind-mounted path (e.g. /data/auth)
+// instead of the container's own home directory.
+const AUTH_DIR = process.env.OPEN_AI_SUB_AUTH_DIR?.trim() || join(homedir(), ".open-ai-sub-auth");
 const AUTH_FILE = join(AUTH_DIR, "auth.json");
 
 export function loadAuth(): StoredAuth | null {

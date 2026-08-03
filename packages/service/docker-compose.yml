@@ -1,0 +1,11 @@
+services:
+  open-ai-sub-auth-service:
+    build: .
+    ports:
+      - "8787:8787"
+    volumes:
+      # Only the auth dir is bind-mounted — not the whole home directory.
+      # Read-write: token refresh writes the new access/refresh token back here.
+      - ${HOME}/.open-ai-sub-auth:/data/auth
+    environment:
+      - OPEN_AI_SUB_AUTH_DIR=/data/auth

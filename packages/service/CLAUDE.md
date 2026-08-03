@@ -20,3 +20,26 @@ npm run build && npm run start   # production
 - `POST /api/chat` — `{ messages, model?, instructions?, stream? }`. `stream: true` returns SSE (`data: {"delta": "..."}`), otherwise `{ text }`. Each message's `content` can be a string or a `ContentPart[]` (`text`/`image`/`file` — image/file parts need a `dataUrl`, i.e. the caller base64-encodes before sending over HTTP; `imageFromFile`/`fileFromFile` in `src/client.ts` are for server-side use only, not exposed over the wire).
 
 `PORT` env var overrides the default `8787`.
+
+## Docker
+
+```bash
+docker compose up --build
+# or manually:
+docker build -t open-ai-sub-auth-service .
+docker run -d -p 8787:8787 \
+  -v "$HOME/.open-ai-sub-auth:/data/auth" \
+  -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
+  open-ai-sub-auth-service
+```
+
+- **Login first, on the host**, before running the container — `npm run login`
+  in any package (they all write to the same `~/.open-ai-sub-auth/auth.json`).
+  `POST /api/login` inside the container binds `localhost:1455` and tries to
+  spawn a browser, neither of which works in a container — don't use it there.
+- Bind mount is **only** `~/.open-ai-sub-auth` → `/data/auth`, not the whole
+  home dir. `OPEN_AI_SUB_AUTH_DIR` (in `src/auth.ts`) is what makes the mount
+  path configurable instead of hardcoded to `homedir()`.
+- Mount is read-write, not read-only — `getValidAuth()` refreshes the access
+  token and writes it back to the same file; read-only would break refresh
+  after ~10 days and the container would need a manual restart+relogin.
