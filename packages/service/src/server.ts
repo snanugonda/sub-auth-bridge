@@ -78,6 +78,59 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
   }
 }
 
+const IMG_INSTRUCTIONS =
+  "You are a precise OCR engine. Output ONLY the literal text visible in the " +
+  "image, exactly as it appears, character for character. Never add commentary, " +
+  "labels, explanations, markdown, or surrounding quotes. If there is no text " +
+  "in the image, output nothing at all.";
+
+// Strips wrapping the model may add despite instructions (quotes, code fences).
+function stripWrapping(text: string): string {
+  let out = text.trim();
+  const fence = /^```[a-zA-Z]*\n([\s\S]*)\n```$/.exec(out);
+  if (fence) out = fence[1].trim();
+  out = out.replace(/^["'`]+|["'`]+$/g, "").trim();
+  return out;
+}
+
+async function handleImg(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  let body: { image?: string; model?: string };
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Invalid JSON body");
+    return;
+  }
+
+  if (!body.image || typeof body.image !== "string") {
+    res
+      .writeHead(400, { "Content-Type": "text/plain; charset=utf-8" })
+      .end("Body must include an 'image' field (data URL, e.g. \"data:image/png;base64,...\")");
+    return;
+  }
+
+  try {
+    const text = await chat(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What text is in this image? Reply with just the text." },
+            { type: "image", dataUrl: body.image },
+          ],
+        },
+      ],
+      { model: body.model, instructions: IMG_INSTRUCTIONS },
+    );
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(stripWrapping(text));
+  } catch (error) {
+    res
+      .writeHead(502, { "Content-Type": "text/plain; charset=utf-8" })
+      .end(error instanceof Error ? error.message : String(error));
+  }
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
 
@@ -95,6 +148,10 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && url.pathname === "/api/chat") {
     void handleChat(req, res);
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/img") {
+    void handleImg(req, res);
     return;
   }
 

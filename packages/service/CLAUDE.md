@@ -18,6 +18,13 @@ npm run build && npm run start   # production
 - `GET /api/status` — `{ signedIn, accountId, expiresAt }` from the shared token file
 - `POST /api/login` — runs the browser OAuth flow server-side (blocks until browser completes it)
 - `POST /api/chat` — `{ messages, model?, instructions?, stream? }`. `stream: true` returns SSE (`data: {"delta": "..."}`), otherwise `{ text }`. Each message's `content` can be a string or a `ContentPart[]` (`text`/`image`/`file` — image/file parts need a `dataUrl`, i.e. the caller base64-encodes before sending over HTTP; `imageFromFile`/`fileFromFile` in `src/client.ts` are for server-side use only, not exposed over the wire).
+- `POST /api/img` — `{ image: "data:image/png;base64,...", model? }`. Response
+  body is **plain text, not JSON** — exactly the text found in the image, no
+  wrapping. Uses a locked OCR system prompt (`IMG_INSTRUCTIONS` in
+  `src/server.ts`) plus `stripWrapping()` to strip quotes/code-fences if the
+  model adds them anyway. This is intentionally a separate route from
+  `/api/chat`, not a flag on it — the contract (plain text, nothing else) is
+  incompatible with `/api/chat`'s `{ text }` JSON envelope.
 
 `PORT` env var overrides the default `8787`.
 
