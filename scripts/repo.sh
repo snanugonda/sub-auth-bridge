@@ -415,6 +415,31 @@ cmd_clean() {
 # setup (first run) / teardown
 # ============================================================================
 
+# Shared by setup/update: waits for /api/health, then sends a real test
+# chat message. Exits non-zero on either failure so callers' numbered-step
+# scripts stop cleanly instead of reporting false success.
+verify_service_health() {
+  local label="$1"
+  local tries=0
+  until curl -sf "http://localhost:$SERVICE_PORT/api/health" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 20 ]; then
+      c_red "Service did not become healthy after 10s."
+      exit 1
+    fi
+    sleep 0.5
+  done
+  c_green "Health check passed."
+
+  echo "Sending a test chat message..."
+  local reply
+  reply="$(cmd_chat "Reply with exactly: $label ok" 2>&1)" || {
+    c_red "Test chat call failed: $reply"
+    exit 1
+  }
+  echo "Response: $reply"
+}
+
 cmd_setup() {
   echo "== 1/5: dependency checks =="
   if ! have node; then
@@ -454,26 +479,43 @@ cmd_setup() {
 
   echo
   echo "== 5/5: verify =="
-  local tries=0
-  until curl -sf "http://localhost:$SERVICE_PORT/api/health" >/dev/null 2>&1; do
-    tries=$((tries + 1))
-    if [ "$tries" -gt 20 ]; then
-      c_red "Service did not become healthy after 10s."
-      exit 1
-    fi
-    sleep 0.5
-  done
-  c_green "Health check passed."
-
-  echo "Sending a test chat message..."
-  local reply
-  reply="$(cmd_chat "Reply with exactly: setup ok" 2>&1)" || {
-    c_red "Test chat call failed: $reply"
-    exit 1
-  }
-  echo "Response: $reply"
+  verify_service_health "setup"
   echo
   c_green "Setup complete. Service running on http://localhost:$SERVICE_PORT"
+}
+
+# CI/CD-shaped local pipeline for an already-set-up machine: pull -> install
+# -> build (fails fast if code doesn't even compile, before touching the
+# running service) -> doctor (informational) -> restart -> verify. Assumes
+# you're already signed in — doesn't touch auth at all, unlike 'setup'.
+cmd_update() {
+  echo "== 1/6: pull latest =="
+  if ! git -C "$ROOT_DIR" pull --ff-only; then
+    c_red "git pull --ff-only failed — resolve manually (uncommitted changes, diverged history, or a real conflict) and re-run."
+    exit 1
+  fi
+
+  echo
+  echo "== 2/6: install =="
+  cmd_install
+
+  echo
+  echo "== 3/6: build =="
+  cmd_build
+
+  echo
+  echo "== 4/6: doctor =="
+  (cmd_doctor) 2>&1 || true
+
+  echo
+  echo "== 5/6: restart service =="
+  cmd_restart auto
+
+  echo
+  echo "== 6/6: verify =="
+  verify_service_health "update"
+  echo
+  c_green "Update complete. Service running on http://localhost:$SERVICE_PORT"
 }
 
 cmd_teardown() {
@@ -684,6 +726,9 @@ Usage: ./scripts/repo.sh <command> [args]
 
   setup            first-run: install, sign in (asks: new login or import
                    from OpenClaw), start the service, health check, test chat
+  update           already set up: git pull --ff-only, install, build (fails
+                   fast if it doesn't compile), doctor, restart, verify —
+                   the CI/CD-shaped "pull latest and redeploy locally" loop
   install          npm install in all 3 packages
   build            build/typecheck all 3 packages
   login [new|openclaw]   run OAuth login, or import from an existing OpenClaw install
@@ -714,6 +759,7 @@ main() {
   shift || true
   case "$command" in
     setup) cmd_setup ;;
+    update) cmd_update ;;
     install) cmd_install ;;
     build) cmd_build ;;
     login) cmd_login "${1:-new}" ;;

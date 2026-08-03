@@ -19,6 +19,7 @@ the OpenClaw-login prompt, health checks, and diagnostics bundling).
 | Command | What it does |
 |---|---|
 | `setup` | First run: install, ask login mode (new vs. OpenClaw import), start the service, health-check, send a test chat |
+| `update` | Already set up: `git pull --ff-only`, install, build (fails fast if it doesn't compile), doctor, restart, verify — the CI/CD-shaped "pull latest and redeploy locally" loop |
 | `install` | `npm install` in all 3 packages |
 | `build` | Build/typecheck all 3 packages |
 | `login [new\|openclaw]` | Run OAuth login, or import an existing OpenClaw login |
@@ -284,13 +285,19 @@ directly working on (e.g. testing `enable-auto-sync` on a host that already
 runs OpenClaw):
 
 ```
-pull latest → ./scripts/repo.sh setup (or just enable-auto-sync)
+first time:  ./scripts/repo.sh setup (or just enable-auto-sync)
+every time after:  ./scripts/repo.sh update
             → let it run
             → ./scripts/repo.sh debug-bundle
             → share the resulting .repo-state/diagnostics-<timestamp>.txt file
             → (fixes land, get pushed)
-            → repeat from "pull latest"
+            → repeat from "update"
 ```
+
+`update` does the `git pull` for you (fast-forward only — it refuses rather
+than merging/rebasing if history has diverged or there are uncommitted
+local changes) plus install/build/restart/verify, so there's no separate
+manual pull step in the loop.
 
 `debug-bundle` is the only manual step — it bundles doctor output,
 service/auto-sync status, log tails, and redacted `auth.json` metadata
