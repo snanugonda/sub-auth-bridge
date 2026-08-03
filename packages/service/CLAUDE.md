@@ -28,6 +28,12 @@ npm run build && npm run start   # production
 
 `PORT` env var overrides the default `8787`.
 
+`GET /openapi.json` serves `openapi.json` (checked into this dir) at
+runtime — read once into memory at startup, so a service restart is needed
+after editing the spec file. Keep the two in sync by hand; nothing
+generates one from the other. Validated with `npx @redocly/cli lint
+openapi.json` before committing.
+
 ## Docker
 
 ```bash

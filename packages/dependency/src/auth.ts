@@ -49,6 +49,7 @@ const LOCK_STALE_MS = 15_000;
 const LOCK_WAIT_TIMEOUT_MS = 5_000;
 const LOCK_POLL_INTERVAL_MS = 150;
 
+/** Reads `~/.open-ai-sub-auth/auth.json` as-is, no refresh, no network call. `null` if not signed in. */
 export function loadAuth(): StoredAuth | null {
   if (!existsSync(AUTH_FILE)) return null;
   return JSON.parse(readFileSync(AUTH_FILE, "utf-8"));

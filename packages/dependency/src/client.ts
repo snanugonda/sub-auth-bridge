@@ -4,19 +4,24 @@ import { extname, basename } from "node:path";
 import { CODEX_RESPONSES_URL, OPENAI_HEADERS, OPENAI_HEADER_VALUES } from "./constants.js";
 import { getValidAuth } from "./auth.js";
 
+/** One piece of a multimodal message. Build image/file parts with {@link imageFromFile}/{@link fileFromFile}. */
 export type ContentPart =
   | { type: "text"; text: string }
   | { type: "image"; dataUrl: string }
   | { type: "file"; dataUrl: string; filename: string };
 
+/** A single turn in a {@link chat} call. `content` can be plain text or a mix of text/image/file parts. */
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string | ContentPart[];
 }
 
 export interface ChatOptions {
+  /** Overrides the built-in default model id. Codex-backend model ids drift over time. */
   model?: string;
+  /** Overrides the default system instructions ("You are a helpful assistant."). */
   instructions?: string;
+  /** Called with each streamed text chunk as it arrives, in addition to the full text being returned at the end. */
   onDelta?: (text: string) => void;
 }
 
@@ -35,12 +40,18 @@ function fileToDataUrl(path: string): { dataUrl: string; mime: string } {
   return { dataUrl: `data:${mime};base64,${b64}`, mime };
 }
 
-/** Reads a local image file and builds an image content part. */
+/**
+ * Reads a local image file (png/jpg/jpeg/gif/webp) and base64-encodes it
+ * into a {@link ContentPart} usable in a {@link chat} message's `content` array.
+ */
 export function imageFromFile(path: string): ContentPart {
   return { type: "image", dataUrl: fileToDataUrl(path).dataUrl };
 }
 
-/** Reads a local file (e.g. PDF) and builds a file content part. */
+/**
+ * Reads a local file (e.g. PDF) and base64-encodes it into a
+ * {@link ContentPart} usable in a {@link chat} message's `content` array.
+ */
 export function fileFromFile(path: string): ContentPart {
   return { type: "file", dataUrl: fileToDataUrl(path).dataUrl, filename: basename(path) };
 }
@@ -64,7 +75,13 @@ function toResponsesInput(messages: ChatMessage[]) {
   });
 }
 
-/** Streams a completion from the ChatGPT Codex backend using subscription auth. */
+/**
+ * Sends a chat completion request to the ChatGPT Codex backend using
+ * subscription auth (calls {@link getValidAuth} internally — sign in with
+ * `login()` first). Always streams under the hood; resolves with the full
+ * text once the response completes. Pass `opts.onDelta` to also react to
+ * each chunk as it arrives.
+ */
 export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<string> {
   const auth = await getValidAuth();
   const sessionId = randomUUID();

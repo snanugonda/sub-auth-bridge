@@ -54,11 +54,19 @@ secret, the same way GitHub CLI's or `gcloud`'s OAuth client ids are public.
 Three standalone implementations of the same thing. They intentionally
 **don't share code** — pick the one that fits, use it on its own.
 
-| Package | What it is | Use case |
-|---|---|---|
-| [`packages/dependency`](packages/dependency) | Installable npm-style module (`main`/`types`/`exports`) | Import `login()` / `chat()` as normal function calls in a TS/Node project |
-| [`packages/single-file`](packages/single-file) | One flat `.ts` file, zero dependencies | Copy-paste into any existing project |
-| [`packages/service`](packages/service) | HTTP API (`node:http`, no framework) + Dockerfile | A backend any language/service can call over HTTP |
+| Package | What it is | Use case | Docs |
+|---|---|---|---|
+| [`packages/dependency`](packages/dependency) | Installable npm-style module (`main`/`types`/`exports`) | Import `login()` / `chat()` as normal function calls in a TS/Node project | [README](packages/dependency/README.md) |
+| [`packages/single-file`](packages/single-file) | One flat `.ts` file, zero dependencies | Copy-paste into any existing project | [README](packages/single-file/README.md) |
+| [`packages/service`](packages/service) | HTTP API (`node:http`, no framework) + Dockerfile | A backend any language/service can call over HTTP | [README](packages/service) · [OpenAPI spec](packages/service/openapi.json) (also served live at `GET /openapi.json`) |
+
+`packages/dependency` and `packages/single-file` each have a standalone
+`README.md` written to travel with the code itself (as an npm dependency,
+or as a copy-pasted file) — point an AI agent working in a *different*
+project at that file when it needs to know how to use this as a library.
+`packages/service`'s `openapi.json` is the machine-readable equivalent for
+the HTTP API — feed it directly to any tool/agent that consumes OpenAPI
+specs, or have it fetch `GET /openapi.json` from a running instance.
 
 All three read and write the same `~/.open-ai-sub-auth/auth.json` — sign in
 once with any one of them, the other two pick up the same session

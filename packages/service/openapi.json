@@ -1,0 +1,162 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "open-ai-sub-auth service",
+    "version": "0.1.0",
+    "description": "HTTP API that calls OpenAI models using a ChatGPT Plus/Pro subscription (OAuth) instead of an OpenAI API key. Runs locally; auth state lives in ~/.open-ai-sub-auth/auth.json on the host, not in this API. Sign in first with `./scripts/repo.sh login` (or `login openclaw`) before calling /api/chat or /api/img."
+  },
+  "servers": [{ "url": "http://localhost:8787", "description": "Default local port (override with PORT env var)" }],
+  "security": [],
+  "x-security-note": "This API has no auth layer of its own — no API key, no bearer token, nothing checked on incoming requests. It's meant to run on localhost/a trusted network; the actual OpenAI credential lives server-side in ~/.open-ai-sub-auth/auth.json, never exposed over HTTP. Don't expose this port publicly without adding your own auth in front of it.",
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Liveness check",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] } } }
+          }
+        }
+      }
+    },
+    "/api/status": {
+      "get": {
+        "summary": "Current auth status (shared token file)",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "Auth status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "signedIn": { "type": "boolean" },
+                    "accountId": { "type": "string", "nullable": true },
+                    "expiresAt": { "type": "integer", "format": "int64", "nullable": true, "description": "Access token expiry, epoch ms" }
+                  },
+                  "required": ["signedIn", "accountId", "expiresAt"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/login": {
+      "post": {
+        "summary": "Run the browser OAuth flow server-side",
+        "description": "Blocks until the browser-based login completes. Only works when the service can open a local browser and bind localhost:1455 — not usable from inside a Docker container. Prefer running `./scripts/repo.sh login` on the host instead.",
+        "operationId": "login",
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "signedIn": { "type": "boolean" }, "accountId": { "type": "string" } }, "required": ["signedIn", "accountId"] } } }
+          },
+          "500": { "description": "Login failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorBody" } } } }
+        }
+      }
+    },
+    "/api/chat": {
+      "post": {
+        "summary": "Send a chat completion request",
+        "operationId": "chat",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChatRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Non-streaming: full response text. Streaming (stream: true in the request): text/event-stream, one `data: {\"delta\": \"...\"}` line per chunk, terminated by `data: [DONE]`.",
+            "content": {
+              "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] } },
+              "text/event-stream": { "schema": { "type": "string", "description": "SSE stream of `data: {\"delta\": string}` events, or `data: {\"error\": string}` on failure, ending with `data: [DONE]`" } }
+            }
+          },
+          "400": { "description": "Invalid request body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorBody" } } } },
+          "502": { "description": "Upstream (OpenAI/Codex backend) request failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorBody" } } } }
+        }
+      }
+    },
+    "/api/img": {
+      "post": {
+        "summary": "Extract text from an image (plain-text response, nothing else)",
+        "description": "Response body is plain text — exactly the text found in the image, no JSON envelope, no commentary, no wrapping. Deliberately a separate endpoint from /api/chat because the two response contracts are incompatible.",
+        "operationId": "img",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "image": { "type": "string", "description": "Data URL, e.g. \"data:image/png;base64,...\"" },
+                  "model": { "type": "string", "description": "Optional model override" }
+                },
+                "required": ["image"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "The extracted text, verbatim", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "400": { "description": "Invalid request body", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "502": { "description": "Upstream request failed", "content": { "text/plain": { "schema": { "type": "string" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } },
+        "required": ["error"]
+      },
+      "ContentPart": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": { "type": { "enum": ["text"] }, "text": { "type": "string" } },
+            "required": ["type", "text"]
+          },
+          {
+            "type": "object",
+            "properties": { "type": { "enum": ["image"] }, "dataUrl": { "type": "string", "description": "e.g. \"data:image/png;base64,...\"" } },
+            "required": ["type", "dataUrl"]
+          },
+          {
+            "type": "object",
+            "properties": { "type": { "enum": ["file"] }, "dataUrl": { "type": "string" }, "filename": { "type": "string" } },
+            "required": ["type", "dataUrl", "filename"]
+          }
+        ]
+      },
+      "ChatMessage": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+          "content": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "$ref": "#/components/schemas/ContentPart" } }
+            ]
+          }
+        },
+        "required": ["role", "content"]
+      },
+      "ChatRequest": {
+        "type": "object",
+        "properties": {
+          "messages": { "type": "array", "items": { "$ref": "#/components/schemas/ChatMessage" }, "minItems": 1 },
+          "model": { "type": "string", "description": "Optional model override. Codex-backend model ids drift over time; omit to use the built-in default." },
+          "instructions": { "type": "string", "description": "Optional system instructions override" },
+          "stream": { "type": "boolean", "default": false, "description": "If true, response is text/event-stream instead of a single JSON body" }
+        },
+        "required": ["messages"]
+      }
+    }
+  }
+}

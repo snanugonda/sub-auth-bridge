@@ -1,8 +1,18 @@
 import http from "node:http";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
 import { login, loadAuth } from "./auth.js";
 import { chat, type ChatMessage } from "./client.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
+
+// Read once at startup, not per-request — it's a static file that ships
+// with the package, not something that changes while the service runs.
+const OPENAPI_JSON = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "..", "openapi.json"),
+  "utf-8",
+);
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -136,6 +146,10 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/openapi.json") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(OPENAPI_JSON);
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
