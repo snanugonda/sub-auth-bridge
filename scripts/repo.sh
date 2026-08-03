@@ -11,8 +11,13 @@ AUTH_FILE="$HOME/.open-ai-sub-auth/auth.json"
 STATE_DIR="$ROOT_DIR/.repo-state"
 NODE_PID_FILE="$STATE_DIR/service-node.pid"
 SERVICE_PORT_FILE="$STATE_DIR/service-port"
-DOCKER_CONTAINER="open-ai-sub-auth-service"
-DOCKER_IMAGE="open-ai-sub-auth-service"
+DOCKER_CONTAINER="hub"
+DOCKER_IMAGE="hub"
+# Opt-in: join a named Docker network so other containers can reach this one
+# by container name (http://hub:8787) instead of a host port at all — sidesteps
+# the loopback/host.docker.internal reachability problem entirely. Created if
+# it doesn't already exist. Unset by default: no behavior change unless asked.
+DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 
 # If the caller set PORT explicitly, that's a hard requirement — start fails
 # loudly if it's taken, same as before. Otherwise the port is chosen
@@ -142,12 +147,21 @@ cmd_start() {
     docker build -t "$DOCKER_IMAGE" "$SERVICE_DIR"
     docker rm -f "$DOCKER_CONTAINER" >/dev/null 2>&1 || true
 
+    local network_args=()
+    if [ -n "$DOCKER_NETWORK" ]; then
+      if ! docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1; then
+        echo "Creating Docker network '$DOCKER_NETWORK'..."
+        docker network create "$DOCKER_NETWORK" >/dev/null
+      fi
+      network_args=(--network "$DOCKER_NETWORK")
+    fi
+
     if [ "$PORT_EXPLICIT" = true ]; then
       if port_in_use "$PORT"; then
         c_red "Port $PORT (set via \$PORT) is already in use. Pick a different PORT or free it first."
         exit 1
       fi
-      docker run -d --name "$DOCKER_CONTAINER" -p "$PORT:8787" \
+      docker run -d --name "$DOCKER_CONTAINER" ${network_args[@]+"${network_args[@]}"} -p "$PORT:8787" \
         -v "$HOME/.open-ai-sub-auth:/data/auth" \
         -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
         "$DOCKER_IMAGE" >/dev/null
@@ -157,7 +171,7 @@ cmd_start() {
       # picks a free ephemeral one, on loopback only. This is what actually
       # fixes "port 8787 already taken by some other container": we don't
       # ask for 8787 at all unless the caller explicitly wants it.
-      docker run -d --name "$DOCKER_CONTAINER" -p "127.0.0.1::8787" \
+      docker run -d --name "$DOCKER_CONTAINER" ${network_args[@]+"${network_args[@]}"} -p "127.0.0.1::8787" \
         -v "$HOME/.open-ai-sub-auth:/data/auth" \
         -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
         "$DOCKER_IMAGE" >/dev/null
@@ -165,6 +179,9 @@ cmd_start() {
     fi
     echo "$SERVICE_PORT" > "$SERVICE_PORT_FILE"
     c_green "Service running in Docker on http://localhost:$SERVICE_PORT"
+    if [ -n "$DOCKER_NETWORK" ]; then
+      echo "Also reachable from other containers on network '$DOCKER_NETWORK' as: http://$DOCKER_CONTAINER:8787"
+    fi
   elif [ "$mode" = "node" ]; then
     echo "Starting service as a local Node process..."
     (cd "$SERVICE_DIR" && npm run build >/dev/null)
@@ -633,7 +650,7 @@ cmd_debug_bundle() {
     if [ -f "$STATE_DIR/service.log" ]; then
       tail -n 100 "$STATE_DIR/service.log"
     else
-      echo "(none — either not running in node mode, or running via docker: run 'docker logs open-ai-sub-auth-service' separately if needed)"
+      echo "(none — either not running in node mode, or running via docker: run 'docker logs hub' separately if needed)"
     fi
     echo
 

@@ -115,6 +115,14 @@ values). Safe to share as-is, no manual redaction needed.
   ports dynamically. Fix was deriving the URL from the incoming request's
   `Host` header instead — always correct, works identically in node mode,
   Docker, and behind any future reverse proxy.
+- `repo.sh` runs under macOS's default `/bin/bash` — **bash 3.2** (Apple
+  froze it there for licensing reasons, never shipped 4+). Under `set -u`,
+  `"${array[@]}"` on a zero-element array throws "unbound variable" in 3.2,
+  even though the exact same code works fine on bash 4+/5 (e.g. Linux CI,
+  Homebrew bash). Use the bash-3.2-safe idiom instead:
+  `${array[@]+"${array[@]}"}`. Bit `scripts/repo.sh`'s Docker network args
+  — worked in isolated syntax checks, only broke on the actual empty-array
+  case (`DOCKER_NETWORK` unset).
 
 ## Reference sources
 

@@ -1,6 +1,7 @@
 services:
-  open-ai-sub-auth-service:
+  hub:
     build: .
+    container_name: hub
     ports:
       - "8787:8787"
     volumes:
@@ -9,3 +10,11 @@ services:
       - ${HOME}/.open-ai-sub-auth:/data/auth
     environment:
       - OPEN_AI_SUB_AUTH_DIR=/data/auth
+    # To let another container reach this one by name instead of a host
+    # port, join a shared external network here (see packages/service/CLAUDE.md
+    # for repo.sh's equivalent via DOCKER_NETWORK=<name>):
+    # networks:
+    #   - shared-net
+# networks:
+#   shared-net:
+#     external: true

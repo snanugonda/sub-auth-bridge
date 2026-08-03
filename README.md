@@ -231,15 +231,19 @@ The container only gets `~/.open-ai-sub-auth` bind-mounted in (read-write,
 so token refresh persists back to the host) — not your whole home directory.
 
 ```bash
-docker build -t open-ai-sub-auth-service .
-docker run -d -p 8787:8787 \
+docker build -t hub .
+docker run -d --name hub -p 8787:8787 \
   -v "$HOME/.open-ai-sub-auth:/data/auth" \
   -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
-  open-ai-sub-auth-service
+  hub
 ```
 
-See [`packages/service/CLAUDE.md`](packages/service/CLAUDE.md) for the full
-route reference.
+The container/image is named `hub` — deliberately generic, not
+`open-ai-...`, since outward-facing names in this project don't reveal the
+backend. See [`packages/service/CLAUDE.md`](packages/service/CLAUDE.md) for
+the full route reference, and for how another container can reach `hub` by
+name instead of a host port (`DOCKER_NETWORK=<name> ./scripts/repo.sh start
+docker`).
 
 ## Importing an existing OpenClaw login
 

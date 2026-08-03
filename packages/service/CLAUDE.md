@@ -59,13 +59,18 @@ usage).
 ```bash
 docker compose up --build
 # or manually:
-docker build -t open-ai-sub-auth-service .
-docker run -d -p 8787:8787 \
+docker build -t hub .
+docker run -d --name hub -p 8787:8787 \
   -v "$HOME/.open-ai-sub-auth:/data/auth" \
   -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
-  open-ai-sub-auth-service
+  hub
 ```
 
+- Container/image name is `hub` (`DOCKER_CONTAINER`/`DOCKER_IMAGE` in
+  `scripts/repo.sh`) — deliberately generic per the project's naming rule,
+  not `open-ai-...`. Don't reintroduce OpenAI/AI-flavored names for
+  anything outward-facing (containers, images, hostnames); source code
+  itself is exempt from this and stays accurate/technical.
 - **Login first, on the host**, before running the container — `npm run login`
   in any package (they all write to the same `~/.open-ai-sub-auth/auth.json`).
   `POST /api/login` inside the container binds `localhost:1455` and tries to
@@ -79,3 +84,31 @@ docker run -d -p 8787:8787 \
 - `docker build` prints a `SecretsUsedInArgOrEnv` warning for
   `OPEN_AI_SUB_AUTH_DIR` — false positive (it's a directory path, not a
   secret), safe to ignore.
+
+### Reachability from other containers
+
+`repo.sh start docker` binds `-p 127.0.0.1::8787` by default (loopback
+only) — reachable from the host, but **not** from another Docker
+container, even via `host.docker.internal`. A loopback-bound host port
+never accepts connections routed through the Docker gateway, container or
+not.
+
+To let another container reach this one, join a shared Docker network and
+address it by container name instead of any host port at all:
+
+```bash
+DOCKER_NETWORK=my-shared-net ./scripts/repo.sh start docker
+```
+
+Creates the network if it doesn't exist, joins it, and the other container
+(on the same network) reaches this one as `http://hub:8787` — Docker's
+built-in DNS, using the fixed *internal* container port, so this also
+sidesteps the whole dynamic-host-port-discovery problem for that consumer.
+Unset by default — no behavior change unless you ask for it.
+
+The alternative (binding `0.0.0.0` instead of `127.0.0.1`) also works but
+was deliberately not made the default: this API has zero auth of its own
+(see `openapi.json`'s `x-security-note`), and `0.0.0.0` exposes it to
+anything that can reach the host's real network interfaces (other devices
+on the same LAN, not just other containers), not just the intended
+consumer.
