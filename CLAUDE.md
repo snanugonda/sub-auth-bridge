@@ -80,10 +80,14 @@ an OpenClaw-linked `auth.json` practically never goes stale. Purely local —
 the sync itself never talks to OpenAI, only OpenClaw's own refreshes
 (happening on its own schedule, independent of this) do, so running this
 often costs nothing on OpenAI's side. **Not installed by `setup`** — opt-in
-only, and as of this writing **not yet live-verified against real
-launchd/cron** (blocked by this environment's own permission classifier
-mid-session) — the code is written and syntax-checked but unverified
-end-to-end.
+only. **Live-verified** (user ran it directly — an agent can't: registering
+a launchd/cron job needs a real permission grant, blocked here even after
+in-chat approval). First real run caught a genuine bug: launchd/cron run
+jobs with a minimal system PATH, not the interactive shell's, so `node`
+wasn't found even though it works in a normal terminal. Fixed by resolving
+`node`'s directory in the enabling shell and baking it into the job's own
+environment (`EnvironmentVariables`/`PATH` in the plist; inline `PATH=` on
+the cron line).
 
 To actually verify this on a real machine: `./scripts/repo.sh
 verify-auto-sync` — run it yourself, not via an agent (registering a
@@ -137,6 +141,16 @@ redaction needed.
   `${array[@]+"${array[@]}"}`. Bit `scripts/repo.sh`'s Docker network args
   — worked in isolated syntax checks, only broke on the actual empty-array
   case (`DOCKER_NETWORK` unset).
+- launchd and cron both run scheduled jobs with a **minimal system PATH**
+  (`/usr/bin:/bin:/usr/sbin:/sbin`), not the interactive shell's — a binary
+  that resolves fine in a terminal (`node` via Homebrew/nvm/etc.) can be
+  "command not found" when the same script runs on a schedule. Resolve the
+  real path (`command -v node`) in the shell that's registering the job,
+  bake it into the job's own environment — don't trust the default PATH.
+- When testing git-integrated script behavior (e.g. `update`'s `--ff-only`
+  guard) with throwaway local commits, don't use `git commit -am` — it
+  sweeps up *all* modified files, including real uncommitted work, into
+  the test commit. Stage/stash explicitly, or use a scratch branch.
 
 ## Reference sources
 
