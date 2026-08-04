@@ -1,6 +1,7 @@
 services:
   hub:
     build: .
+    image: hub
     container_name: hub
     ports:
       - "8787:8787"
@@ -10,11 +11,15 @@ services:
       - ${HOME}/.open-ai-sub-auth:/data/auth
     environment:
       - OPEN_AI_SUB_AUTH_DIR=/data/auth
-    # To let another container reach this one by name instead of a host
-    # port, join the shared network (repo.sh's equivalent joins this same
-    # network — my-hub-net — by default; see packages/service/CLAUDE.md):
-    # networks:
-    #   - my-hub-net
-# networks:
-#   my-hub-net:
-#     external: true
+    # Joins the same network repo.sh's `start docker` uses by default, so
+    # another container can reach this one as http://hub:8787 instead of a
+    # host port (see packages/service/CLAUDE.md). external: true because
+    # either this or repo.sh may create it first — external avoids the two
+    # tools fighting over network ownership. If neither has run yet:
+    #   docker network create my-hub-net
+    networks:
+      - my-hub-net
+
+networks:
+  my-hub-net:
+    external: true

@@ -57,6 +57,7 @@ usage).
 ## Docker
 
 ```bash
+docker network create my-hub-net   # first time only, if repo.sh hasn't already created it
 docker compose up --build
 # or manually:
 docker build -t hub .
@@ -65,6 +66,14 @@ docker run -d --name hub -p 8787:8787 \
   -e OPEN_AI_SUB_AUTH_DIR=/data/auth \
   hub
 ```
+
+`docker-compose.yml` declares `my-hub-net` as `external: true` — Compose
+won't create it (unlike `repo.sh start docker`, which auto-creates it if
+missing), so `docker compose up` fails with "network ... declared as
+external, but could not be found" the very first time unless the network
+already exists. `external: true` is deliberate: it stops Compose and
+`repo.sh` from fighting over ownership of the same network when either one
+might create it first.
 
 - Container/image name is `hub` (`DOCKER_CONTAINER`/`DOCKER_IMAGE` in
   `scripts/repo.sh`) — deliberately generic per the project's naming rule,
