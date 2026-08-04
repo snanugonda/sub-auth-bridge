@@ -555,6 +555,21 @@ cmd_enable_auto_sync() {
   mkdir -p "$STATE_DIR"
   local log_file="$STATE_DIR/openclaw-sync.log"
 
+  # launchd and cron both run jobs with a minimal system PATH
+  # (/usr/bin:/bin:/usr/sbin:/sbin) — NOT your interactive shell's PATH, so
+  # `node` (wherever it's actually installed — Homebrew, nvm, etc.) isn't
+  # found there even though it works fine in a normal terminal. Resolve it
+  # now, in the shell that's actually running this command (which does have
+  # the right PATH), and bake that directory into the scheduled job's
+  # environment instead of hoping the default PATH happens to include it.
+  if ! have node; then
+    c_red "node not found in this shell's PATH — can't resolve where to point the scheduled job. Install Node or fix your PATH, then retry."
+    exit 1
+  fi
+  local node_dir
+  node_dir="$(dirname "$(command -v node)")"
+  local job_path="$node_dir:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
   case "$(uname)" in
     Darwin)
       mkdir -p "$(dirname "$LAUNCHD_PLIST")"
@@ -570,6 +585,11 @@ cmd_enable_auto_sync() {
     <string>/bin/bash</string>
     <string>$sync_script</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$job_path</string>
+  </dict>
   <key>StartInterval</key>
   <integer>$SYNC_INTERVAL_SECONDS</integer>
   <key>StandardOutPath</key>
@@ -581,6 +601,8 @@ cmd_enable_auto_sync() {
 </dict>
 </plist>
 EOF
+      # Force-reload so a PATH fix actually takes effect on an already-running agent.
+      launchctl bootout "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null || launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
       launchctl bootstrap "gui/$(id -u)" "$LAUNCHD_PLIST" 2>/dev/null \
         || launchctl load "$LAUNCHD_PLIST"
       c_green "Installed launchd agent: $LAUNCHD_LABEL (every ${SYNC_INTERVAL_SECONDS}s)"
@@ -588,7 +610,7 @@ EOF
       echo "Log: $log_file"
       ;;
     Linux)
-      local cron_line="* * * * * /bin/bash $sync_script >> $log_file 2>&1 $CRON_MARKER"
+      local cron_line="* * * * * PATH=$job_path /bin/bash $sync_script >> $log_file 2>&1 $CRON_MARKER"
       (crontab -l 2>/dev/null | grep -v "$CRON_MARKER"; echo "$cron_line") | crontab -
       c_green "Installed cron entry (every minute — cron's finest granularity)."
       echo "Log: $log_file"
@@ -793,12 +815,18 @@ cmd_verify_auto_sync() {
     elif echo "$new_content" | grep -qi "credential unchanged since last sync\|synced updated"; then
       verdict="PASS"
       verdict_detail="The scheduler fired on time and the sync script ran successfully against real OpenClaw data."
-    elif echo "$new_content" | grep -qi "error\|fail"; then
-      verdict="FAIL"
-      verdict_detail="The scheduler fired, but the sync script itself reported an error — see the log excerpt below."
-    else
+    elif [ -z "$new_content" ]; then
       verdict="INCONCLUSIVE"
-      verdict_detail="The scheduler fired (the log changed) but the new content didn't match any known pattern — see the log excerpt below."
+      verdict_detail="The log's mtime changed but there's no readable new content — something touched the file without writing a recognizable line. Check the full log tail below."
+    else
+      # Default to FAIL for anything that isn't a known-good pattern, rather
+      # than trying to enumerate every possible error phrase (e.g. "node:
+      # command not found" doesn't contain the words "error" or "fail" —
+      # missing that exact gap is what motivated this default in the first
+      # place). Unrecognized output from a script that only ever prints a
+      # few known messages is worth flagging, not shrugging off.
+      verdict="FAIL"
+      verdict_detail="The scheduler fired, but the sync script's output didn't match any known-success pattern — likely an error. See the log excerpt below."
     fi
   else
     verdict="FAIL"
@@ -838,6 +866,8 @@ cmd_verify_auto_sync() {
   echo
   if [ "$verdict" = "PASS" ]; then
     c_green "Verdict: $verdict"
+  elif [ "$verdict" = "FAIL" ]; then
+    c_red "Verdict: $verdict"
   else
     c_yellow "Verdict: $verdict"
   fi
