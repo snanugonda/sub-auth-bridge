@@ -35,6 +35,7 @@ the OpenClaw-login prompt, health checks, and diagnostics bundling).
 | `enable-auto-sync` | Install a launchd (macOS) / cron (Linux) job that runs the OpenClaw sync every 60s — opt-in, not run by `setup` |
 | `disable-auto-sync` | Remove that scheduled job |
 | `auto-sync-status` | Check whether it's currently installed |
+| `verify-auto-sync` | Run this yourself, not via an agent — enables auto-sync, waits for a real scheduler tick (not just "is it registered"), writes a pass/fail report to share back |
 | `debug-bundle` | Write one timestamped diagnostics file (doctor + status + log tails + redacted auth metadata, never raw tokens) to share back for debugging |
 | `help` | Print this list |
 
@@ -281,18 +282,22 @@ own refreshes, on its own schedule, ever call OpenAI).
 ### Working across machines
 
 The typical loop when developing this against a machine you're not
-directly working on (e.g. testing `enable-auto-sync` on a host that already
-runs OpenClaw):
+directly working on (e.g. testing auto-sync on a host that already runs
+OpenClaw):
 
 ```
-first time:  ./scripts/repo.sh setup (or just enable-auto-sync)
+first time:  ./scripts/repo.sh setup
 every time after:  ./scripts/repo.sh update
-            → let it run
-            → ./scripts/repo.sh debug-bundle
-            → share the resulting .repo-state/diagnostics-<timestamp>.txt file
+            → ./scripts/repo.sh verify-auto-sync   (specifically for auto-sync)
+              or ./scripts/repo.sh debug-bundle     (anything else)
+            → share the resulting .repo-state/*.txt file
             → (fixes land, get pushed)
             → repeat from "update"
 ```
+
+`verify-auto-sync` and `enable-auto-sync` register a real OS-level
+scheduled job (launchd/cron) — run these yourself, not via an agent,
+same reasoning as any other host-level permission grant.
 
 `update` does the `git pull` for you (fast-forward only — it refuses rather
 than merging/rebasing if history has diverged or there are uncommitted

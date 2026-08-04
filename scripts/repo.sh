@@ -717,6 +717,136 @@ cmd_debug_bundle() {
 }
 
 # ============================================================================
+# verify-auto-sync — end-to-end proof the scheduler actually fires, not just
+# that it's registered. Run this yourself (not via an agent): registering a
+# launchd/cron job is the kind of host-level action that needs a real
+# permission grant, not a scripted one.
+# ============================================================================
+
+cmd_verify_auto_sync() {
+  mkdir -p "$STATE_DIR"
+  local timestamp
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local out="$STATE_DIR/verify-auto-sync-$timestamp.txt"
+  local log_file="$STATE_DIR/openclaw-sync.log"
+
+  # Baseline: what does the log look like BEFORE we (re-)enable? Needed to
+  # tell "the scheduler wrote something new" apart from "the log already
+  # had content from a previous run" — file existing/non-empty isn't proof
+  # of anything by itself.
+  local baseline_mtime="none"
+  local baseline_lines=0
+  if [ -f "$log_file" ]; then
+    baseline_mtime="$(stat -f %m "$log_file" 2>/dev/null || stat -c %Y "$log_file" 2>/dev/null)"
+    baseline_lines="$(wc -l < "$log_file" | tr -d ' ')"
+  fi
+
+  echo "Step 1/4: enabling auto-sync (safe to run even if already enabled)..."
+  local enable_output
+  enable_output="$(cmd_enable_auto_sync 2>&1)" || true
+  echo "$enable_output"
+
+  echo
+  echo "Step 2/4: checking registration status..."
+  local status_output
+  status_output="$(cmd_auto_sync_status 2>&1)" || true
+  echo "$status_output"
+
+  echo
+  echo "Step 3/4: waiting for the scheduler to actually fire (up to 150s)."
+  echo "launchd's RunAtLoad should fire almost immediately; cron waits for the next minute boundary — this can take a little while, that's normal."
+  local waited=0
+  local poll_interval=5
+  local max_wait=150
+  local fired=false
+  while [ "$waited" -lt "$max_wait" ]; do
+    if [ -f "$log_file" ]; then
+      local current_mtime
+      current_mtime="$(stat -f %m "$log_file" 2>/dev/null || stat -c %Y "$log_file" 2>/dev/null)"
+      if [ "$baseline_mtime" = "none" ] || [ "$current_mtime" != "$baseline_mtime" ]; then
+        fired=true
+        break
+      fi
+    fi
+    sleep "$poll_interval"
+    waited=$((waited + poll_interval))
+    echo "  ...waited ${waited}s"
+  done
+
+  echo
+  echo "Step 4/4: writing report..."
+
+  local new_content=""
+  local verdict=""
+  local verdict_detail=""
+
+  if [ "$fired" = true ]; then
+    if [ "$baseline_lines" -gt 0 ]; then
+      new_content="$(tail -n "+$((baseline_lines + 1))" "$log_file")"
+    else
+      new_content="$(cat "$log_file" 2>/dev/null)"
+    fi
+
+    if echo "$new_content" | grep -qi "no openclaw auth database found"; then
+      verdict="PASS (scheduler) / INCONCLUSIVE (no OpenClaw data here)"
+      verdict_detail="The scheduler fired on time and ran the sync script — launchd/cron registration itself works. It reported no OpenClaw database on this machine, which is expected here and isn't a failure of auto-sync. For a full content test, run this same command on a machine that has OpenClaw installed."
+    elif echo "$new_content" | grep -qi "credential unchanged since last sync\|synced updated"; then
+      verdict="PASS"
+      verdict_detail="The scheduler fired on time and the sync script ran successfully against real OpenClaw data."
+    elif echo "$new_content" | grep -qi "error\|fail"; then
+      verdict="FAIL"
+      verdict_detail="The scheduler fired, but the sync script itself reported an error — see the log excerpt below."
+    else
+      verdict="INCONCLUSIVE"
+      verdict_detail="The scheduler fired (the log changed) but the new content didn't match any known pattern — see the log excerpt below."
+    fi
+  else
+    verdict="FAIL"
+    verdict_detail="No log activity observed within ${max_wait}s of enabling. The scheduler likely isn't registered correctly — check the registration status output above for errors."
+  fi
+
+  {
+    echo "===== VERDICT: $verdict ====="
+    echo "$verdict_detail"
+    echo
+    echo "open-ai-sub-auth auto-sync verification — $timestamp UTC"
+    echo "host: $(uname -a)"
+    echo
+    echo "===== enable-auto-sync output ====="
+    echo "$enable_output"
+    echo
+    echo "===== auto-sync-status output ====="
+    echo "$status_output"
+    echo
+    echo "===== waited ${waited}s for a scheduler tick; fired: $fired ====="
+    echo
+    echo "===== new log content since baseline ====="
+    if [ -n "$new_content" ]; then
+      echo "$new_content"
+    else
+      echo "(none)"
+    fi
+    echo
+    echo "===== full log tail (last 50 lines), for context ====="
+    if [ -f "$log_file" ]; then
+      tail -n 50 "$log_file"
+    else
+      echo "(log file does not exist)"
+    fi
+  } | sed -E 's/\x1b\[[0-9;]*m//g' > "$out"
+
+  echo
+  if [ "$verdict" = "PASS" ]; then
+    c_green "Verdict: $verdict"
+  else
+    c_yellow "Verdict: $verdict"
+  fi
+  c_green "Full report written to: $out"
+  echo "Share that file back — no tokens in it, same guarantee as debug-bundle."
+  echo "To remove the scheduled job when you're done testing: ./scripts/repo.sh disable-auto-sync"
+}
+
+# ============================================================================
 # help / dispatch
 # ============================================================================
 
@@ -748,6 +878,10 @@ Usage: ./scripts/repo.sh <command> [args]
                    the OpenClaw sync every ${SYNC_INTERVAL_SECONDS:-60}s (opt-in, not run by 'setup')
   disable-auto-sync   remove that scheduled job
   auto-sync-status    check whether it's currently installed
+  verify-auto-sync    run yourself (not via an agent): enables auto-sync,
+                   waits for a real scheduler tick, writes a timestamped
+                   pass/fail report to share back — proves it actually
+                   fires, not just that it's registered
   debug-bundle     write one timestamped diagnostics file (doctor, auto-sync
                    status, log tails, redacted auth metadata) to share back
   help             this message
@@ -775,6 +909,7 @@ main() {
     enable-auto-sync) cmd_enable_auto_sync ;;
     disable-auto-sync) cmd_disable_auto_sync ;;
     auto-sync-status) cmd_auto_sync_status ;;
+    verify-auto-sync) cmd_verify_auto_sync ;;
     debug-bundle) cmd_debug_bundle ;;
     help|-h|--help) cmd_help ;;
     *)

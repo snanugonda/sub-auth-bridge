@@ -85,13 +85,27 @@ launchd/cron** (blocked by this environment's own permission classifier
 mid-session) — the code is written and syntax-checked but unverified
 end-to-end.
 
-To report back how it went on a real machine: `./scripts/repo.sh
-debug-bundle` writes one timestamped file
-(`.repo-state/diagnostics-<UTC timestamp>.txt`) containing doctor output,
-auto-sync status, service status, the last 200 lines of the sync log, the
-last 100 lines of the node-mode service log, and redacted `auth.json`
-metadata (`source` + expiry only — never tokens, never `access`/`refresh`
-values). Safe to share as-is, no manual redaction needed.
+To actually verify this on a real machine: `./scripts/repo.sh
+verify-auto-sync` — run it yourself, not via an agent (registering a
+launchd/cron job is a host-level permission grant). It enables auto-sync,
+then *waits for a real scheduler tick* (polls the sync log's mtime for up
+to 150s — proof something actually ran, not just that it's registered),
+classifies the result (PASS / FAIL / INCONCLUSIVE, e.g. "no OpenClaw db on
+this machine" is a pass for the scheduler but inconclusive for real sync
+content), and writes a timestamped report to
+`.repo-state/verify-auto-sync-<UTC timestamp>.txt`. Its polling/
+classification logic was verified in isolation (mocked log writes,
+covering all three verdict paths) since the actual `enable-auto-sync` call
+can't be run by an agent in this environment — the final live integration
+still needs a real run.
+
+For anything else, `./scripts/repo.sh debug-bundle` writes one timestamped
+file (`.repo-state/diagnostics-<UTC timestamp>.txt`) containing doctor
+output, auto-sync status, service status, the last 200 lines of the sync
+log, the last 100 lines of the node-mode service log, and redacted
+`auth.json` metadata (`source` + expiry only — never tokens, never
+`access`/`refresh` values). Both are safe to share as-is, no manual
+redaction needed.
 
 ## Dev quirks (this environment)
 
